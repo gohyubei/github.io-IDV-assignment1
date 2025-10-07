@@ -21,7 +21,7 @@
   <table id="psiTable">
     <thead>
       <tr>
-        <th>Reading Type</th>
+        <th>Metrics</th>
         <th>National</th>
         <th>Central</th>
         <th>West</th>
@@ -35,8 +35,24 @@
 
   <script>
     const API = 'https://api.data.gov.sg/v1/environment/psi';
-    // Keep region order consistent with header:
     const REGIONS = ['national','central','west','east','north','south'];
+
+    function formatVal(v){
+      if (v == null || Number.isNaN(v)) return '—';
+      return (typeof v === 'number' && !Number.isInteger(v)) ? v.toFixed(2) : String(v);
+    }
+
+    // If 'national' is missing, derive it from the five regions
+    function ensureNational(regionVals){
+      if (regionVals.national != null) return regionVals;
+      const keys = ['central','west','east','north','south'];
+      const nums = keys.map(k => regionVals[k]).filter(v => typeof v === 'number');
+      if (nums.length === keys.length) {
+        const avg = nums.reduce((a,b)=>a+b,0) / nums.length;
+        return { ...regionVals, national: avg }; // derived
+      }
+      return regionVals; // leave as-is if we can't derive
+    }
 
     async function loadPSIData() {
       try {
@@ -44,50 +60,44 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
 
-        if (!data?.items?.length || !data.items[0]?.readings) {
-          throw new Error('Unexpected API shape: missing items[0].readings');
-        }
-
-        const item = data.items[0];
-        const readings = item.readings;
-        const timestamp = item.timestamp;
-        const updateTime = item.update_timestamp || item.timestamp; // fallback
+        const item = data?.items?.[0];
+        const readings = item?.readings;
+        if (!readings) throw new Error('Unexpected API shape: missing items[0].readings');
 
         const tbody = document.querySelector("#psiTable tbody");
         const updatedTimeEl = document.getElementById("updatedTime");
         const dataTimestampEl = document.getElementById("dataTimestamp");
 
-        // Clear existing rows
         tbody.innerHTML = "";
 
-        // Build rows for each reading type
-        Object.entries(readings).forEach(([key, regionVals]) => {
+        Object.entries(readings).forEach(([metric, values]) => {
+          const vals = ensureNational(values);
           const tr = document.createElement("tr");
 
-          // First cell: reading name
+          // Metrics name cell
           const nameTd = document.createElement("td");
-          nameTd.textContent = key;
+          nameTd.textContent = metric;
           tr.appendChild(nameTd);
 
-          // Region cells in fixed order
+          // Region cells in fixed header order
           REGIONS.forEach(r => {
             const td = document.createElement("td");
-            const v = regionVals?.[r];
-            td.textContent = (v == null || Number.isNaN(v)) ? '—'
-                           : (typeof v === 'number' && !Number.isInteger(v)) ? v.toFixed(2)
-                           : String(v);
+            const v = vals?.[r];
+            td.textContent = formatVal(v);
+            if (r === 'national' && values.national == null && typeof v === 'number') {
+              td.title = 'Derived from regional average';
+            }
             tr.appendChild(td);
           });
 
           tbody.appendChild(tr);
         });
 
-        // Friendly times in SG timezone
-        const dataTime = timestamp
-          ? new Date(timestamp).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })
+        const dataTime = item.timestamp
+          ? new Date(item.timestamp).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })
           : '—';
-        const updateDisplayTime = updateTime
-          ? new Date(updateTime).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })
+        const updateDisplayTime = (item.update_timestamp || item.timestamp)
+          ? new Date(item.update_timestamp || item.timestamp).toLocaleString("en-SG", { timeZone: "Asia/Singapore" })
           : '—';
 
         dataTimestampEl.textContent = `📅 Data recorded at: ${dataTime}`;
@@ -100,9 +110,8 @@
       }
     }
 
-    // Initial load + auto-refresh every 5 minutes
     loadPSIData();
-    setInterval(loadPSIData, 5 * 60 * 1000);
+    setInterval(loadPSIData, 5 * 60 * 1000); // auto-refresh every 5 minutes
   </script>
 </body>
 </html>
